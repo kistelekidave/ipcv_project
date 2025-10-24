@@ -99,7 +99,7 @@ def main():
         landmarks = get_landmarks(frame)
 
         if landmarks:
-            # Task 1: Face Warp (Big Eyes)
+            # Task 1: Face Warp
             left_eye = get_eye_polygon(landmarks, LEFT_EYE, w, h)
             right_eye = get_eye_polygon(landmarks, RIGHT_EYE, w, h)
 
