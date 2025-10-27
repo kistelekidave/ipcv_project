@@ -11,10 +11,22 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5,
 )
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+hands = mp_hands.Hands(static_image_mode=False,
+                           max_num_hands=2,
+                           min_detection_confidence=0.5,
+                           min_tracking_confidence=0.5)
 
 # Define landmark indices for both eyes
 LEFT_EYE = [33, 133, 160, 159, 158, 157, 173]
 RIGHT_EYE = [362, 263, 387, 386, 385, 384, 398]
+
+class FaceEffect:
+    DEBUG = 0
+    BIG_EYE = 1
+    FACE_AUGMENTATION = 2
+    MOTION_TRACKING = 3
 
 
 # Functions
@@ -76,40 +88,120 @@ def apply_big_eye_effect(image, eye_pts, scale=1.2):
     image[y1:y2, x1:x2] = blended
     return image
 
+def fingers_up(hand_landmarks, handedness):
+    # returns [thumb, index, middle, ring, pinky] bools
+    tips = [4, 8, 12, 16, 20]
+    pip = [2, 6, 10, 14, 18]  # use lower joint for comparison
+    coords = [(lm.x, lm.y) for lm in hand_landmarks.landmark]
+    handed = handedness.classification[0].label if handedness else "Right"
+    up = [False]*5
+
+    # For fingers except thumb: tip.y < pip.y -> finger up (image origin top-left)
+    for i in range(1,5):
+        up[i] = coords[tips[i]][1] < coords[pip[i]][1]
+
+    # Thumb: use x comparison depending on handedness
+    if handed == "Right":
+        up[0] = coords[tips[0]][0] > coords[pip[0]][0]
+    else:
+        up[0] = coords[tips[0]][0] < coords[pip[0]][0]
+
+    return up
+
+def detect_gesture(up):
+    cnt = sum(up)
+    if cnt == 0:
+        return "Fist"
+    if cnt == 5:
+        return "Open"
+    if up == [False, True, False, False, False]:
+        return "Point"
+    if up[0] and not any(up[1:]):
+        return "Thumb"
+    return f"{cnt} fingers"
 
 
 # Main Loop
-
 def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Error: Cannot open camera.")
         return
 
-    print("Press ctrl+C to quit.")
+    print("Press ESC or Q to quit.")
+
+    faceEffect = FaceEffect.BIG_EYE
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-
+        
         frame = cv2.flip(frame, 1)
         h, w, _ = frame.shape
 
-        landmarks = get_landmarks(frame)
+        key = cv2.waitKey(5) & 0xFF
+        # Exit on 'q' or ESC
+        if key in (27, ord('q')):
+            break
+        # Apply big eye effect
+        elif key == ord('0'):
+            faceEffect = FaceEffect.DEBUG
+        elif key == ord('1'):
+            faceEffect = FaceEffect.BIG_EYE
+        elif key == ord('2'):
+            faceEffect = FaceEffect.FACE_AUGMENTATION
+        elif key == ord('3'):
+            faceEffect = FaceEffect.MOTION_TRACKING
 
-        if landmarks:
-            # Task 1: Face Warp
-            left_eye = get_eye_polygon(landmarks, LEFT_EYE, w, h)
-            right_eye = get_eye_polygon(landmarks, RIGHT_EYE, w, h)
+        
+        if faceEffect == FaceEffect.DEBUG:
+            landmarks = get_landmarks(frame)
+            if landmarks:
+                pts = np.array([[int(lm.x * w), int(lm.y * h)] for lm in landmarks.landmark])
+                x1, y1, w1, h1 = cv2.boundingRect(pts)
+                cv2.rectangle(frame, (x1, y1), (x1 + w1, y1 + h1), (0, 255, 0), 2)
 
-            frame = apply_big_eye_effect(frame, left_eye, scale=1.2)
-            frame = apply_big_eye_effect(frame, right_eye, scale=1.2)
+                # Draw eye bounding boxes
+                left_eye_pts = get_eye_polygon(landmarks, LEFT_EYE, w, h)
+                x2, y2, w2, h2 = cv2.boundingRect(left_eye_pts)
+                cv2.rectangle(frame, (x2, y2), (x2 + w2, y2 + h2), (255, 0, 0), 2)
+                right_eye_pts = get_eye_polygon(landmarks, RIGHT_EYE, w, h)
+                x3, y3, w3, h3 = cv2.boundingRect(right_eye_pts)
+                cv2.rectangle(frame, (x3, y3), (x3 + w3, y3 + h3), (255, 0, 0), 2)
+
+        elif faceEffect == FaceEffect.BIG_EYE:
+            landmarks = get_landmarks(frame)
+
+            if landmarks:
+                # Task 1: Face Warp
+                left_eye = get_eye_polygon(landmarks, LEFT_EYE, w, h)
+                right_eye = get_eye_polygon(landmarks, RIGHT_EYE, w, h)
+
+                frame = apply_big_eye_effect(frame, left_eye, scale=1.2)
+                frame = apply_big_eye_effect(frame, right_eye, scale=1.2)
+                
+        elif faceEffect == FaceEffect.FACE_AUGMENTATION:
+            pass
+
+        elif faceEffect == FaceEffect.MOTION_TRACKING:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = hands.process(rgb)
+
+            if results.multi_hand_landmarks:
+                for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
+                                                      results.multi_handedness):
+                    mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                    up = fingers_up(hand_landmarks, handedness)
+                    gesture = detect_gesture(up)
+
+                    # position label near wrist landmark (0)
+                    x = int(hand_landmarks.landmark[0].x * w)
+                    y = int(hand_landmarks.landmark[0].y * h) - 20
+                    cv2.putText(frame, f"{gesture} ({handedness.classification[0].label})",
+                                (x, max(y, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
 
         cv2.imshow("Real-time Face Effects", frame)
-        key = cv2.waitKey(5) & 0xFF
-        if key == 27:
-            break
 
     cap.release()
     cv2.destroyAllWindows()
