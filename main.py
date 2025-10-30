@@ -1,7 +1,14 @@
 import cv2
 import numpy as np
 import mediapipe as mp
+from pathlib import Path
+from typing import List, Tuple, Optional
 
+FILTERS_DIR = Path("filters")
+FACE_FILTER_PATH     = FILTERS_DIR   / "face_overlay.png" 
+
+# Haar cascade for face detection 
+HAAR_FACE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 
 # Face Mesh Setup
 mp_face_mesh = mp.solutions.face_mesh
@@ -120,6 +127,56 @@ def detect_gesture(up):
         return "Thumb"
     return f"{cnt} fingers"
 
+#Functions Face Augmentation
+
+def overlay_png_rgba(base_bgr: np.ndarray, overlay_rgba: np.ndarray,
+                     box: Tuple[int, int, int, int]):
+
+    x, y, w, h = box
+
+    overlay = cv2.resize(overlay_rgba, (w, h), interpolation=cv2.INTER_AREA)
+
+    if overlay.shape[2] == 4:
+        overlay_rgb = overlay[:, :, :3]
+        alpha = overlay[:, :, 3:] / 255.0
+    else:
+        overlay_rgb = overlay
+        alpha = np.ones((*overlay.shape[:2], 1), dtype=np.float32)
+
+    # Determine overlay region bounds 
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(base_bgr.shape[1], x + w), min(base_bgr.shape[0], y + h)
+    ow, oh = x2 - x1, y2 - y1
+    if ow <= 0 or oh <= 0:
+        return
+
+    base_roi = base_bgr[y1:y2, x1:x2].astype(np.float32)
+    over_roi = overlay_rgb[0:oh, 0:ow].astype(np.float32)
+    alpha_roi = alpha[0:oh, 0:ow].astype(np.float32)
+
+    blended = alpha_roi * over_roi + (1 - alpha_roi) * base_roi
+    base_bgr[y1:y2, x1:x2] = blended.astype(np.uint8)
+
+
+def apply_face_filter(frame: np.ndarray,
+                      face_cascade: cv2.CascadeClassifier,
+                      overlay_rgba: Optional[np.ndarray]):
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
+                                          minSize=(30, 30), flags=cv2.CASCADE_SCALE_IMAGE)
+
+    for (x, y, w, h) in faces:
+        if overlay_rgba is not None:
+            shift_x = int(0.05 * w)
+            shift_y = int(0.01 * h)      
+            overlay_box = (x + shift_x, y - shift_y, int(0.9 * w), int(0.9 * h))
+            overlay_png_rgba(frame, overlay_rgba, overlay_box)
+
+
+def safe_imread(path: Path, flags=cv2.IMREAD_UNCHANGED) -> Optional[np.ndarray]:
+    img = cv2.imread(str(path), flags)
+    return img
 
 # Main Loop
 def main():
@@ -139,6 +196,10 @@ def main():
         
         frame = cv2.flip(frame, 1)
         h, w, _ = frame.shape
+
+        #Face Augmentation setup
+        face_cascade = cv2.CascadeClassifier(HAAR_FACE_PATH)
+        face_overlay_rgba = safe_imread(FACE_FILTER_PATH, cv2.IMREAD_UNCHANGED)
 
         key = cv2.waitKey(5) & 0xFF
         # Exit on 'q' or ESC
@@ -182,6 +243,7 @@ def main():
                 frame = apply_big_eye_effect(frame, right_eye, scale=1.2)
                 
         elif faceEffect == FaceEffect.FACE_AUGMENTATION:
+            apply_face_filter(frame, face_cascade, face_overlay_rgba)
             pass
 
         elif faceEffect == FaceEffect.MOTION_TRACKING:
@@ -200,6 +262,7 @@ def main():
                     y = int(hand_landmarks.landmark[0].y * h) - 20
                     cv2.putText(frame, f"{gesture} ({handedness.classification[0].label})",
                                 (x, max(y, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+                       
 
         cv2.imshow("Real-time Face Effects", frame)
 
