@@ -189,6 +189,30 @@ def main():
 
     faceEffect = FaceEffect.BIG_EYE
 
+    #Face Augmentation setup
+    #For face detection
+    face_cascade = cv2.CascadeClassifier(HAAR_FACE_PATH)
+    #Load overlay image with alpha channel
+    face_overlay_rgba = safe_imread(FACE_FILTER_PATH, cv2.IMREAD_UNCHANGED)    
+
+    if face_cascade.empty():
+        print(f"Error: Failed to load Haar cascade from '{HAAR_FACE_PATH}'.")
+        print("Make sure OpenCV's haarcascades are available. Exiting.")
+        cap.release()
+        cv2.destroyAllWindows()
+        return
+
+    if face_overlay_rgba is None:
+        print(f"Warning: Overlay image not found at '{FACE_FILTER_PATH}'. FACE_AUGMENTATION will be disabled.")
+    else:
+        if face_overlay_rgba.ndim != 3 or face_overlay_rgba.shape[2] not in (3, 4):
+            print(f"Warning: Overlay image has unexpected shape {face_overlay_rgba.shape}. Expected 3 or 4 channels. Disabling overlay.")
+            face_overlay_rgba = None
+        else:
+            if face_overlay_rgba.dtype != np.uint8:
+                print("Warning: Overlay image has non-uint8 dtype — converting to uint8.")
+                face_overlay_rgba = np.clip(face_overlay_rgba, 0, 255).astype(np.uint8)
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -196,10 +220,6 @@ def main():
         
         frame = cv2.flip(frame, 1)
         h, w, _ = frame.shape
-
-        #Face Augmentation setup
-        face_cascade = cv2.CascadeClassifier(HAAR_FACE_PATH)
-        face_overlay_rgba = safe_imread(FACE_FILTER_PATH, cv2.IMREAD_UNCHANGED)
 
         key = cv2.waitKey(5) & 0xFF
         # Exit on 'q' or ESC
