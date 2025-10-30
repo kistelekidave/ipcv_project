@@ -6,6 +6,7 @@ from typing import List, Tuple, Optional
 
 FILTERS_DIR = Path("filters")
 FACE_FILTER_PATH     = FILTERS_DIR   / "face_overlay.png" 
+MOUSTACHE_FILTER_PATH = FILTERS_DIR   / "moustache.png"
 
 # Haar cascade for face detection 
 HAAR_FACE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -98,21 +99,32 @@ def apply_big_eye_effect(image, eye_pts, scale=1.2):
 def fingers_up(hand_landmarks, handedness):
     # returns [thumb, index, middle, ring, pinky] bools
     tips = [4, 8, 12, 16, 20]
-    pip = [2, 6, 10, 14, 18]  # use lower joint for comparison
+    pip = [3, 6, 10, 14, 18]  # use lower joint for comparison
     coords = [(lm.x, lm.y) for lm in hand_landmarks.landmark]
     handed = handedness.classification[0].label if handedness else "Right"
     up = [False]*5
 
-    # For fingers except thumb: tip.y < pip.y -> finger up (image origin top-left)
-    for i in range(1,5):
-        up[i] = coords[tips[i]][1] < coords[pip[i]][1]
+    # # For fingers except thumb: tip.y < pip.y -> finger up (image origin top-left)
+    # for i in range(1,5):
+    #     up[i] = coords[tips[i]][1] < coords[pip[i]][1]
 
-    # Thumb: use x comparison depending on handedness
-    if handed == "Right":
-        up[0] = coords[tips[0]][0] > coords[pip[0]][0]
-    else:
-        up[0] = coords[tips[0]][0] < coords[pip[0]][0]
+    # # Thumb: use x comparison depending on handedness
+    # if handed == "Right":
+    #     up[0] = coords[tips[0]][0] > coords[pip[0]][0]
+    # else:
+    #     up[0] = coords[tips[0]][0] < coords[pip[0]][0]
 
+    up[0] = (coords[tips[0]][0] > coords[pip[0]][0]) if handed == "Right" else (coords[tips[0]][0] < coords[pip[0]][0])
+
+    for i in range(0,5):
+        tip_wrist = np.sqrt( (coords[tips[i]][0] - coords[0][0])**2 +
+                                      (coords[tips[i]][1] - coords[0][1])**2 )
+        pip_wrist = np.sqrt( (coords[pip[i]][0] - coords[0][0])**2 +
+                                      (coords[pip[i]][1] - coords[0][1])**2 )
+        if i == 0:
+            up[i] = tip_wrist > pip_wrist * 1.15
+        else:
+            up[i] = tip_wrist > pip_wrist
     return up
 
 def detect_gesture(up):
@@ -126,6 +138,69 @@ def detect_gesture(up):
     if up[0] and not any(up[1:]):
         return "Thumb"
     return f"{cnt} fingers"
+
+def pointing_vector(up, hand_landmarks):
+    if up != [False, True, False, False, False]:
+        return None
+    tip = hand_landmarks.landmark[8]
+    pip = hand_landmarks.landmark[6]
+    dir = np.array([tip.x - pip.x, tip.y - pip.y])
+    dir = dir / np.sqrt(dir[0]**2 + dir[1]**2)
+    return dir
+
+def add_moustache(frame, direction, face_cascade, moustache_overlay):
+    if direction is None:
+        return
+    
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
+                                          minSize=(30, 30), flags=cv2.CASCADE_SCALE_IMAGE)
+    
+    # angle = np.degrees(np.arctan2(direction[1], direction[0]))
+    
+    for (x, y, w, h) in faces:
+        moustache_width = int(w * 0.6)
+        moustache_height = int(moustache_width * moustache_overlay.shape[0] / moustache_overlay.shape[1])
+
+        # center = (moustache_width // 2, moustache_height // 2)
+        # rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+        
+        # # Rotate moustache overlay
+        # rotated_moustache = cv2.warpAffine(moustache_overlay, rotation_matrix, 
+        #                                  (moustache_width, moustache_height),
+        #                                  flags=cv2.INTER_LINEAR)
+        
+        x1 = x + int(w * 0.2)
+        y1 = y + int(h * 0.65)
+        overlay_box = (x1, y1, moustache_width, moustache_height)
+        overlay_png_rgba(frame, moustache_overlay, overlay_box)
+
+def apply_tracking(frame, w, h, face_cascade, moustache_overlay):
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb)
+
+    if results.multi_hand_landmarks:
+        for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
+                                                results.multi_handedness):
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            up = fingers_up(hand_landmarks, handedness)
+            gesture = detect_gesture(up)
+
+            # position label near wrist landmark (0)
+            x = int(hand_landmarks.landmark[0].x * w)
+            y = int(hand_landmarks.landmark[0].y * h) - 20
+            cv2.putText(frame, f"{gesture} ({handedness.classification[0].label})",
+                        (x, max(y, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+            direction = pointing_vector(up, hand_landmarks)
+            if direction is not None:
+                start_x = w - 60 if handedness.classification[0].label == "Right" else 60
+                start_y = 60
+                cv2.arrowedLine(frame,
+                                (start_x, start_y),
+                                (int(start_x + direction[0] * 50),
+                                 int(start_y + direction[1] * 50)),
+                                (0,0,255), 3, tipLength=0.2)
+                add_moustache(frame, direction, face_cascade, moustache_overlay)
 
 #Functions Face Augmentation
 
@@ -193,7 +268,8 @@ def main():
     #For face detection
     face_cascade = cv2.CascadeClassifier(HAAR_FACE_PATH)
     #Load overlay image with alpha channel
-    face_overlay_rgba = safe_imread(FACE_FILTER_PATH, cv2.IMREAD_UNCHANGED)    
+    face_overlay_rgba = safe_imread(FACE_FILTER_PATH, cv2.IMREAD_UNCHANGED)   
+    moustache_overlay = safe_imread(MOUSTACHE_FILTER_PATH, cv2.IMREAD_UNCHANGED) 
 
     if face_cascade.empty():
         print(f"Error: Failed to load Haar cascade from '{HAAR_FACE_PATH}'.")
@@ -267,21 +343,7 @@ def main():
             pass
 
         elif faceEffect == FaceEffect.MOTION_TRACKING:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = hands.process(rgb)
-
-            if results.multi_hand_landmarks:
-                for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
-                                                      results.multi_handedness):
-                    mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-                    up = fingers_up(hand_landmarks, handedness)
-                    gesture = detect_gesture(up)
-
-                    # position label near wrist landmark (0)
-                    x = int(hand_landmarks.landmark[0].x * w)
-                    y = int(hand_landmarks.landmark[0].y * h) - 20
-                    cv2.putText(frame, f"{gesture} ({handedness.classification[0].label})",
-                                (x, max(y, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+            apply_tracking(frame, w, h, face_cascade, moustache_overlay)
                        
 
         cv2.imshow("Real-time Face Effects", frame)
