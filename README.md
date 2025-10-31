@@ -1,5 +1,7 @@
 The system captures live video using OpenCV and processes each frame in real time.  The Real-time face system can apply 3 Real-time Face Visual Effects, through keyboard interaction while the system is active.  This effects will be applied to the user’s face or/and hands.
 
+To run the program type on the terminal: python main.py
+
 Keyboard commands
 q:quit the simulation
 0:activate debug, shows the face and eyes bounding boxs  
