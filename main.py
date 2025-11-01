@@ -171,7 +171,7 @@ def add_moustache(frame, direction, face_cascade, moustache_overlay):
         #                                  flags=cv2.INTER_LINEAR)
         
         x1 = x + int(w * 0.2)
-        y1 = y + int(h * 0.65)
+        y1 = y + int(h * 0.60)
         overlay_box = (x1, y1, moustache_width, moustache_height)
         overlay_png_rgba(frame, moustache_overlay, overlay_box)
 
