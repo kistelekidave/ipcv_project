@@ -19,6 +19,7 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5,
 )
+# Hand Mesh Setup
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 hands = mp_hands.Hands(static_image_mode=False,
@@ -39,7 +40,9 @@ class FaceEffect:
 
 # Functions
 def get_landmarks(image):
-    """Detect face landmarks with MediaPipe Face Mesh"""
+    """
+    Detect face landmarks with MediaPipe Face Mesh
+    """
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     result = face_mesh.process(rgb)
     if result.multi_face_landmarks:
@@ -48,7 +51,9 @@ def get_landmarks(image):
 
 
 def get_eye_polygon(landmarks, eye_points, w, h):
-    """Return polygon (numpy array) for an eye given landmark indices"""
+    """
+    Return polygon (numpy array) for an eye given landmark indices
+    """
     pts = np.array(
         [[int(landmarks.landmark[i].x * w),
           int(landmarks.landmark[i].y * h)] for i in eye_points]
@@ -97,22 +102,15 @@ def apply_big_eye_effect(image, eye_pts, scale=1.2):
     return image
 
 def fingers_up(hand_landmarks, handedness):
-    # returns [thumb, index, middle, ring, pinky] bools
-    tips = [4, 8, 12, 16, 20]
+    """
+    Determine which fingers are up
+    returns [thumb, index, middle, ring, pinky] bools
+    """
+    tips = [4, 8, 12, 16, 20] # fingertip landmarks
     pip = [3, 6, 10, 14, 18]  # use lower joint for comparison
     coords = [(lm.x, lm.y) for lm in hand_landmarks.landmark]
     handed = handedness.classification[0].label if handedness else "Right"
     up = [False]*5
-
-    # # For fingers except thumb: tip.y < pip.y -> finger up (image origin top-left)
-    # for i in range(1,5):
-    #     up[i] = coords[tips[i]][1] < coords[pip[i]][1]
-
-    # # Thumb: use x comparison depending on handedness
-    # if handed == "Right":
-    #     up[0] = coords[tips[0]][0] > coords[pip[0]][0]
-    # else:
-    #     up[0] = coords[tips[0]][0] < coords[pip[0]][0]
 
     up[0] = (coords[tips[0]][0] > coords[pip[0]][0]) if handed == "Right" else (coords[tips[0]][0] < coords[pip[0]][0])
 
@@ -121,13 +119,18 @@ def fingers_up(hand_landmarks, handedness):
                                       (coords[tips[i]][1] - coords[0][1])**2 )
         pip_wrist = np.sqrt( (coords[pip[i]][0] - coords[0][0])**2 +
                                       (coords[pip[i]][1] - coords[0][1])**2 )
-        if i == 0:
+        # If thumb tip is further from wrist than pip (and a bit further), thumb is up
+        # This is because the thumb cant get as close to the wrist as the other fingers can compared to their pips
+        if i == 0: 
             up[i] = tip_wrist > pip_wrist * 1.15
-        else:
+        else: # If tip is further from wrist than the pip, finger is up
             up[i] = tip_wrist > pip_wrist
     return up
 
 def detect_gesture(up):
+    """
+    Detect simple gestures based on which fingers are up
+    """
     cnt = sum(up)
     if cnt == 0:
         return "Fist"
@@ -140,6 +143,9 @@ def detect_gesture(up):
     return f"{cnt} fingers"
 
 def pointing_vector(up, hand_landmarks):
+    """
+    If pointing gesture detected, return normalized 2D direction vector of index finger
+    """
     if up != [False, True, False, False, False]:
         return None
     tip = hand_landmarks.landmark[8]
@@ -149,6 +155,9 @@ def pointing_vector(up, hand_landmarks):
     return dir
 
 def add_moustache(frame, direction, face_cascade, moustache_overlay):
+    """
+    Add moustache overlay on detected faces if pointing gesture is detected
+    """
     if direction is None:
         return
     
@@ -156,19 +165,9 @@ def add_moustache(frame, direction, face_cascade, moustache_overlay):
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
                                           minSize=(30, 30), flags=cv2.CASCADE_SCALE_IMAGE)
     
-    # angle = np.degrees(np.arctan2(direction[1], direction[0]))
-    
     for (x, y, w, h) in faces:
         moustache_width = int(w * 0.6)
         moustache_height = int(moustache_width * moustache_overlay.shape[0] / moustache_overlay.shape[1])
-
-        # center = (moustache_width // 2, moustache_height // 2)
-        # rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-        
-        # # Rotate moustache overlay
-        # rotated_moustache = cv2.warpAffine(moustache_overlay, rotation_matrix, 
-        #                                  (moustache_width, moustache_height),
-        #                                  flags=cv2.INTER_LINEAR)
         
         x1 = x + int(w * 0.5 - moustache_width // 2)
         y1 = y + int(h * 0.60)
@@ -176,6 +175,10 @@ def add_moustache(frame, direction, face_cascade, moustache_overlay):
         overlay_png_rgba(frame, moustache_overlay, overlay_box)
 
 def apply_tracking(frame, w, h, face_cascade, moustache_overlay):
+    """
+    Apply motion tracking with hand gestures
+    Detect hands and faces, draw landmarks, and add moustache if pointing gesture is detected
+    """
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = hands.process(rgb)
 
@@ -206,6 +209,9 @@ def apply_tracking(frame, w, h, face_cascade, moustache_overlay):
 
 def overlay_png_rgba(base_bgr: np.ndarray, overlay_rgba: np.ndarray,
                      box: Tuple[int, int, int, int]):
+    """
+    Overlay a PNG image with alpha channel onto a BGR image at the specified box
+    """
 
     x, y, w, h = box
 
@@ -236,6 +242,9 @@ def overlay_png_rgba(base_bgr: np.ndarray, overlay_rgba: np.ndarray,
 def apply_face_filter(frame: np.ndarray,
                       face_cascade: cv2.CascadeClassifier,
                       overlay_rgba: Optional[np.ndarray]):
+    """
+    Detect faces and apply face filter overlay
+    """
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
@@ -250,6 +259,9 @@ def apply_face_filter(frame: np.ndarray,
 
 
 def safe_imread(path: Path, flags=cv2.IMREAD_UNCHANGED) -> Optional[np.ndarray]:
+    """
+    Safely read an image from the given path. Returns None if the image cannot be read.
+    """
     img = cv2.imread(str(path), flags)
     return img
 
@@ -301,14 +313,14 @@ def main():
         # Exit on 'q' or ESC
         if key in (27, ord('q')):
             break
-        # Apply big eye effect
+        
         elif key == ord('0'):
             faceEffect = FaceEffect.DEBUG
-        elif key == ord('1'):
+        elif key == ord('1'): # Apply big eye effect
             faceEffect = FaceEffect.BIG_EYE
-        elif key == ord('2'):
+        elif key == ord('2'): # Apply augmentation effect
             faceEffect = FaceEffect.FACE_AUGMENTATION
-        elif key == ord('3'):
+        elif key == ord('3'): # Apply tracking
             faceEffect = FaceEffect.MOTION_TRACKING
 
         
